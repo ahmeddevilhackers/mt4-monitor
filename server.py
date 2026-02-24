@@ -1,8 +1,8 @@
 """
-MT4 Multi-Account Monitor - Central Server v2.1
+MT4 Multi-Account Monitor - Central Server v2.2
 - Cent account support (USC/USc → divide by 100)
 - Telegram alerts for dangerous margin levels
-- Auto-cleanup: removes accounts with zero balance
+- Auto-cleanup: removes accounts with balance < MIN_BALANCE (default $5)
 Deploy free on: Render.com or Railway.app
 """
 
@@ -27,6 +27,7 @@ TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN",   "")
 TELEGRAM_CHAT  = os.environ.get("TELEGRAM_CHAT_ID", "")
 DANGER_ML      = float(os.environ.get("DANGER_ML",  "150"))
 WARN_ML        = float(os.environ.get("WARN_ML",    "250"))
+MIN_BALANCE    = float(os.environ.get("MIN_BALANCE", "5.0"))
 
 # Alert tracker
 alerted = {}
@@ -86,8 +87,8 @@ def background_tasks():
 
             # ── AUTO CLEANUP: zero balance ────────────────
             balance = acc.get("balance", 0)
-            if balance <= 0:
-                print(f"Auto-removing zero balance account: {acc_id}")
+            if balance < MIN_BALANCE:
+                print(f"Auto-removing low balance account: {acc_id} (balance={balance})")
                 accounts.pop(acc_id, None)
                 alerted.pop(acc_id, None)
                 continue
@@ -151,8 +152,8 @@ def receive_report():
 
     # ── Skip zero balance accounts ──────────────
     balance = data.get("balance", 0)
-    if balance <= 0:
-        return jsonify({"status": "skipped", "reason": "zero balance"}), 200
+    if balance < MIN_BALANCE:
+        return jsonify({"status": "skipped", "reason": f"balance {balance} below minimum {MIN_BALANCE}"}), 200
 
     data["last_update"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     data = normalize_account(data)
