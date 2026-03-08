@@ -259,6 +259,38 @@ def delete_account(account_id):
 
 
 # ─────────────────────────────────────────────
+# POST /reset-profit  ← تصفير العداد
+# ─────────────────────────────────────────────
+@app.route("/reset-profit", methods=["POST"])
+def reset_profit():
+    key = request.headers.get("X-API-Key", "")
+    if key != API_KEY:
+        return jsonify({"error": "unauthorized"}), 401
+
+    reset_time = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+
+    for acc_id in list(accounts.keys()):
+        bal = accounts[acc_id].get("balance", 0)
+        daily_snapshots[acc_id] = {
+            "date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+            "start_balance": bal
+        }
+        cumulative_profit[acc_id] = 0.0
+        previous_balance[acc_id] = bal
+
+        # Update account data immediately
+        accounts[acc_id]["daily_profit"]      = 0.0
+        accounts[acc_id]["cumulative_profit"] = 0.0
+        accounts[acc_id]["day_start_balance"] = bal
+
+    return jsonify({
+        "status": "reset",
+        "accounts_reset": len(accounts),
+        "reset_time": reset_time
+    }), 200
+
+
+# ─────────────────────────────────────────────
 # GET /health
 # ─────────────────────────────────────────────
 @app.route("/health", methods=["GET"])
