@@ -1,8 +1,9 @@
 """
-MT4 Multi-Account Monitor - Central Server v2.2
+MT4 Multi-Account Monitor - Central Server v2.3
 - Cent account support (USC/USc → divide by 100)
 - Telegram alerts for dangerous margin levels
 - Auto-cleanup: removes accounts with balance < MIN_BALANCE (default $5)
+- Daily & cumulative profit tracking per account
 Deploy free on: Render.com or Railway.app
 """
 
@@ -20,6 +21,49 @@ CORS(app)
 
 # In-memory store
 accounts = {}
+
+# ─────────────────────────────────────────────
+# PROFIT TRACKING
+# ─────────────────────────────────────────────
+# daily_snapshots[account_id] = {
+#   "date": "YYYY-MM-DD",          ← اليوم اللي اتاخد فيه الـ snapshot
+#   "start_balance": float,        ← البالانس أول اليوم
+# }
+daily_snapshots = {}
+
+# cumulative_profit[account_id] = float   ← الأرباح المتراكمة من أول يوم
+cumulative_profit = {}
+
+# previous_balance[account_id] = float    ← آخر بالانس اتسجل (لحساب الأرباح المحققة)
+previous_balance = {}
+
+def update_profit_tracking(account_id, balance):
+    """Track daily and cumulative profit based on balance changes."""
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    # ── Initialize if first time ──
+    if account_id not in daily_snapshots:
+        daily_snapshots[account_id] = {
+            "date": today,
+            "start_balance": balance
+        }
+        cumulative_profit[account_id] = 0.0
+        previous_balance[account_id] = balance
+        return
+
+    # ── New day? Save yesterday's profit and reset snapshot ──
+    if daily_snapshots[account_id]["date"] != today:
+        yesterday_start = daily_snapshots[account_id]["start_balance"]
+        yesterday_end   = previous_balance.get(account_id, balance)
+        day_profit      = yesterday_end - yesterday_start
+        cumulative_profit[account_id] = cumulative_profit.get(account_id, 0) + day_profit
+
+        daily_snapshots[account_id] = {
+            "date": today,
+            "start_balance": balance
+        }
+
+    previous_balance[account_id] = balance
 
 # Config
 API_KEY        = os.environ.get("API_KEY",          "mt4monitor2024")
@@ -91,6 +135,9 @@ def background_tasks():
                 print(f"Auto-removing low balance account: {acc_id} (balance={balance})")
                 accounts.pop(acc_id, None)
                 alerted.pop(acc_id, None)
+                daily_snapshots.pop(acc_id, None)
+                cumulative_profit.pop(acc_id, None)
+                previous_balance.pop(acc_id, None)
                 continue
 
             # ── MARGIN ALERTS ─────────────────────────────
@@ -157,6 +204,21 @@ def receive_report():
 
     data["last_update"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     data = normalize_account(data)
+
+    # ── Track profit (use normalized balance for cent accounts) ──
+    update_profit_tracking(account_id, data.get("balance", 0))
+
+    # ── Inject profit data into account ──
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    snap  = daily_snapshots.get(account_id, {})
+    start_bal   = snap.get("start_balance", data.get("balance", 0))
+    daily_prof  = data.get("balance", 0) - start_bal
+    cumul_prof  = cumulative_profit.get(account_id, 0) + daily_prof
+
+    data["daily_profit"]      = round(daily_prof, 2)
+    data["cumulative_profit"] = round(cumul_prof, 2)
+    data["day_start_balance"] = round(start_bal, 2)
+
     accounts[account_id] = data
 
     return jsonify({"status": "ok", "account_id": account_id}), 200
@@ -189,6 +251,9 @@ def delete_account(account_id):
     if account_id in accounts:
         accounts.pop(account_id)
         alerted.pop(account_id, None)
+        daily_snapshots.pop(account_id, None)
+        cumulative_profit.pop(account_id, None)
+        previous_balance.pop(account_id, None)
         return jsonify({"status": "deleted", "account_id": account_id}), 200
     return jsonify({"error": "not found"}), 404
 
@@ -208,5 +273,5 @@ def health():
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    print(f"MT4 Monitor Server v2.1 running on port {port}")
+    print(f"MT4 Monitor Server v2.3 running on port {port}")
     app.run(host="0.0.0.0", port=port)
